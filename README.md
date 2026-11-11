@@ -1,13 +1,328 @@
-# Xiaomi BE3600 Pro (RP01) — Root / SSH Guide
+# Xiaomi BE5000 (RD18) — как включить Telnet
 
-**小米 BE3600 Pro 网线版（RP01）root / SSH 完整教程**
-
-> **No disassembly · No UART · No downgrade · No xmir-patcher**
-> **无需拆机 · 无需串口 · 无需降级 · 不依赖 xmir-patcher**
+Для прошивки **1.0.91**. Подключите компьютер к сети своего роутера.
 
 <a id="top"></a>
+<a id="ru"></a>
 
-**🌐 Language / 语言：** [**简体中文**](#zh) · [**English**](#en)
+**Язык / Language / 语言:** **Русский** · [English](#en) · [简体中文](#zh)
+
+[♥ Поддержать проект через GitHub Sponsors](https://github.com/sponsors/pabragin)
+
+## Windows — простой запуск
+
+1. Установите [Python 3](https://www.python.org/downloads/windows/).
+   Если установщик предлагает **Add python.exe to PATH**, включите эту опцию.
+2. [Скачайте архив проекта](https://github.com/pabragin/xiaomi-rp01-root/archive/refs/heads/main.zip)
+   и **распакуйте** его в папку.
+3. Скачайте `putty.exe` с [официального сайта PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html)
+   и положите рядом с `START_WINDOWS.bat`.
+4. Дважды нажмите **`START_WINDOWS.bat`**.
+5. Введите IP роутера (или нажмите Enter для `192.168.31.1`),
+   **пароль его веб-интерфейса** и SN с наклейки. SN можно пропустить, если знаете root-пароль.
+6. После успешной проверки порта откроется PuTTY. Войдите как **`root`**.
+   Пароль программа покажет перед подключением; если вы его раньше меняли, используйте свой.
+
+Первый запуск сам подготовит окружение Python и установит зависимость — нужен интернет.
+При вводе паролей символы не отображаются. Если PuTTY не открылся, запустите его вручную:
+**Host Name:** `192.168.31.1` (или ваш IP), **Connection type:** `Telnet`, **Port:** `23`, затем **Open**.
+
+## macOS / Linux
+
+Установите Python 3, скачайте и распакуйте тот же архив. Откройте терминал в папке
+проекта и выполните:
+
+```bash
+python3 run.py
+```
+
+Ответьте на вопросы программы. Для подключения используйте PuTTY или команду
+`telnet 192.168.31.1`, если клиент Telnet установлен.
+
+## Что нужно знать
+
+- **Бэкап разделов для запуска не нужен.** Ничего дополнительно настраивать не требуется.
+- После перезагрузки доступ может пропасть — просто запустите программу ещё раз.
+- Калькулятор пароля проверен исходным проектом на RP01; на RD18 результат зависит
+  от использования того же алгоритма. Если пароль не подходит, нужен действующий root-пароль.
+- Telnet передаёт данные открытым текстом. Используйте свою доверенную локальную сеть.
+- Способ включения Telnet взят из [issue #9](https://github.com/perrywey/xiaomi-rp01-root/issues/9).
+  Этот форк проверен локальными тестами; запуск на Windows и физическом RD18 автором форка не проверен.
+
+<details>
+<summary><strong>Подробности: ручной запуск, автозапуск после перезагрузки и резервные копии</strong></summary>
+
+## Что исправлено в этом форке
+
+По [сообщению пользователя в issue #9](https://github.com/perrywey/xiaomi-rp01-root/issues/9),
+в прошивке BE5000 1.0.91 отсутствует `/usr/sbin/dropbear`, поэтому обычный запуск SSH
+не работает. Этот форк включает Telnet, если Dropbear отсутствует. Можно также явно
+выбрать Telnet параметром `--telnet`.
+
+Вторая поправка касается резервных копий: приёмник проверяет размеры разделов по
+`/proc/mtd` вашего роутера, а не по жёстко заданной таблице от RP01.
+
+Локальные проверки кода пройдены. Автор этого форка не проверял работу на физическом
+BE5000 и сохранение доступа после его перезагрузки. Первоначальный способ включения
+Telnet взят из указанного отчёта пользователя.
+
+## 1. Подготовка на компьютере
+
+Нужны Python 3, Git и клиент Telnet. Подключите компьютер к локальной сети роутера.
+Далее используется адрес `192.168.31.1`; если у вас другой, замените его в командах.
+
+Скачайте форк и установите зависимость в отдельное окружение Python:
+
+```bash
+git clone https://github.com/pabragin/xiaomi-rp01-root.git
+cd xiaomi-rp01-root
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install requests
+```
+
+Команды активации окружения здесь приведены для macOS и Linux.
+Если оболочка пишет `telnet: command not found`, установите клиент Telnet для своей ОС.
+
+Понадобится **пароль веб-интерфейса роутера** — тот, с которым вы входите в панель
+управления. Это не обязательно пароль Wi-Fi и не пароль аккаунта Xiaomi.
+Скрипты пока выводят часть сообщений на китайском; запрос пароля выглядит как
+`请输入路由器 WEB 管理密码`.
+
+## 2. Рассчитать пароль root
+
+Найдите серийный номер **SN** на наклейке роутера. Подставьте свой номер вместо примера,
+сохранив `/`, если он есть:
+
+```bash
+python3 tools/calc_root_pwd.py '12345/A1B2C3D4E5F6'
+```
+
+Скрипт выведет восьмизначный пароль в строке `密码`. Имя пользователя — `root`.
+Калькулятор использует алгоритм, проверенный исходным проектом на RP01; он подходит
+для устройств с тем же алгоритмом генерации пароля. Если root-пароль уже меняли,
+используйте установленный пароль. Issue #9 не подтверждает отдельно проверку
+калькулятора на RD18.
+
+Не публикуйте свой SN и полученный пароль.
+
+## 3. Включить Telnet
+
+**На компьютере**, из папки проекта с активным окружением Python:
+
+```bash
+python3 tools/exploit_set_macfilter_rules.py --ip 192.168.31.1 --telnet
+```
+
+Когда скрипт запросит пароль, введите **пароль веб-интерфейса**.
+Команда отправляет роутеру следующий набор действий:
+
+```sh
+echo 1 > /proc/xiaoqiang/ft_mode
+nvram set telnet_en=1
+nvram commit
+telnetd
+```
+
+Они включают необходимые для Xiaomi флаги и запускают Telnet с обычным входом
+по логину и паролю. Ответ API `{"code":0}` сам по себе не подтверждает запуск сервиса.
+Проверка — успешное подключение на следующем шаге.
+
+## 4. Подключиться к роутеру
+
+**На компьютере:**
+
+```bash
+telnet 192.168.31.1
+```
+
+Введите логин `root` и root-пароль из шага 2 либо ранее установленный пароль.
+При вводе пароля символы могут не отображаться — это нормально.
+
+Telnet передаёт пароль и команды открытым текстом: используйте доверенную локальную
+сеть и не открывайте порт 23 в интернет. Порт SSH 22 на этой прошивке останется
+закрытым, если SSH-сервер не установлен.
+
+## 5. Сохранить доступ после перезагрузки — по желанию
+
+Без этого шага после перезагрузки может потребоваться снова выполнить шаг 3.
+Следующий способ использует `/data` и cron. Он предполагает, что `/etc/crontabs`
+на вашей прошивке хранится постоянно; на RD18 это ещё требуется проверить.
+
+**Внутри Telnet-сессии на роутере** выполните:
+
+```sh
+mkdir -p /data/telnet /etc/crontabs
+cat > /data/telnet/boot.sh <<'BOOTEOF'
+#!/bin/sh
+echo 1 > /proc/xiaoqiang/ft_mode
+netstat -ltn 2>/dev/null | grep -q ':23 ' || telnetd
+BOOTEOF
+chmod 700 /data/telnet/boot.sh
+nvram set telnet_en=1
+nvram commit
+grep -qF '/data/telnet/boot.sh' /etc/crontabs/root 2>/dev/null || echo '* * * * * /data/telnet/boot.sh' >> /etc/crontabs/root
+chmod 600 /etc/crontabs/root
+/etc/init.d/cron restart 2>/dev/null || /usr/sbin/crond -c /etc/crontabs -b
+/data/telnet/boot.sh
+```
+
+Команды добавляют одну задачу cron, сохраняя существующие. Она раз в минуту проверяет
+порт 23 и при необходимости запускает Telnet. После следующей перезагрузки подождите
+около минуты и попробуйте подключиться. Если доступ не восстановился, повторите шаг 3.
+
+## 6. Резервная копия разделов — необязательно для Telnet
+
+Для включения Telnet бэкап не нужен. Он полезен перед прошивкой и другими изменениями,
+при которых может потребоваться восстановление устройства. Этот раздел был
+в исходном проекте; в форке исправлена проверка размеров для разных моделей.
+
+У RD18 другая таблица разделов: в issue #9 указаны `mtd0`–`mtd13`.
+Нельзя переносить номера разделов и расположение калибровочных данных с RP01.
+Команды ниже читают фактический список из `/proc/mtd` и не записывают данные во flash.
+
+**На компьютере** запустите приёмник в отдельном терминале из папки проекта:
+
+```bash
+python3 tools/recv_backup.py "$HOME/rd18_backup" 8001
+```
+
+Узнайте локальный IP компьютера. Убедитесь, что роутер может подключиться к нему
+на порт 8001. Приёмник должен оставаться запущенным.
+
+**В Telnet-сессии на роутере** посмотрите таблицу разделов и свободную память:
+
+```sh
+cat /proc/mtd
+df -h /tmp
+```
+
+В `/tmp` должно хватать места одновременно на бинарную копию крупнейшего раздела
+и её base64-представление — суммарно примерно 2,4 размера раздела.
+Если памяти недостаточно, не запускайте этот способ копирования.
+
+В следующем блоке замените `192.168.31.100` на **IP своего компьютера**, затем
+выполните его **на роутере**:
+
+```sh
+PC_IP=192.168.31.100
+wget -q --post-file=/proc/mtd -O /dev/null "http://$PC_IP:8001/proc-mtd.txt" &&
+awk -F: '/^mtd[0-9]+:/ {print $1}' /proc/mtd | while read -r m; do
+    dd if=/dev/mtdblock"${m#mtd}" of=/tmp/m.bin bs=65536 2>/dev/null &&
+    base64 /tmp/m.bin > /tmp/m.b64 &&
+    wget -q --post-file=/tmp/m.b64 -O /dev/null "http://$PC_IP:8001/$m.b64" || break
+    rm -f /tmp/m.bin /tmp/m.b64
+done
+```
+
+Сначала передаётся таблица разделов, затем сами разделы. Base64 нужен из-за
+описанного в исходном проекте обрезания бинарных POST-запросов в BusyBox wget.
+Приёмник сохраняет декодированные файлы `mtdN.bin` на компьютере.
+
+Результаты в окне приёмника:
+
+- `[MTD]` — таблица разделов принята.
+- `[OK]` — размер полученного раздела совпадает с таблицей устройства.
+- `[NG]` — размер не совпадает; такую копию нельзя считать полной.
+- `[UNCHECKED]` — для раздела нет ожидаемого размера; проверка не выполнена.
+
+Проверьте, что **каждый раздел из `/proc/mtd` получен и отмечен `[OK]`**.
+Совпадение размера не является проверкой контрольной суммы. Сохраните копию каталога
+`rd18_backup` на другом носителе; файлы могут содержать пароли и ключи устройства.
+
+## Если подключение не работает
+
+- **Не удаётся войти в веб-интерфейс через скрипт:** проверьте адрес роутера и пароль
+  его панели управления. Для обычного использования параметр `--no-auth` не нужен.
+- **Telnet сообщает `Connection refused`:** сервис не запущен. Повторите шаг 3
+  и посмотрите сообщения скрипта. Успешный ответ API не гарантирует запуск Telnet.
+- **Telnet подключается, но пароль не подходит:** нужен пароль пользователя `root`.
+  Расчёт по SN не восстановит пароль, который ранее поменяли вручную.
+- **SSH сообщает `Connection refused`:** в RD18 1.0.91 отсутствует Dropbear;
+  используйте Telnet по этой инструкции.
+
+## Проверки кода
+
+**На компьютере**, в активном окружении Python:
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 tools/calc_root_pwd.py --selftest
+```
+
+Тесты проверяют выбор SSH/Telnet, разбор таблицы разделов и локальный HTTP-приём
+резервных копий. Они не обращаются к роутеру и не проверяют работу на реальном RD18.
+
+---
+
+Ниже сохранены китайская и английская инструкции исходного проекта для
+BE3600 Pro (RP01/RP02). Их команды запуска SSH и номера разделов относятся к этим
+моделям. Для BE5000 используйте русскую инструкцию выше.
+
+
+</details>
+
+---
+
+<a id="rd18"></a>
+
+### Xiaomi BE5000 (RD18), firmware 1.0.91 / 固件 1.0.91
+
+[Issue #9](https://github.com/perrywey/xiaomi-rp01-root/issues/9) reports successful
+access on RD18 1.0.91, where `/usr/sbin/dropbear` is absent. This fork defaults to
+SSH when Dropbear exists and otherwise enables Xiaomi's Telnet flags and starts
+`telnetd`. To explicitly select Telnet:
+
+[#9 社区报告](https://github.com/perrywey/xiaomi-rp01-root/issues/9)确认 RD18 1.0.91
+没有 `/usr/sbin/dropbear`。本 fork 默认优先启动 SSH，缺少 Dropbear 时启用 Telnet；
+也可显式选择 Telnet：
+
+```bash
+python3 tools/exploit_set_macfilter_rules.py --ip 192.168.31.1 --password YOUR_WEB_PASSWORD --telnet
+telnet 192.168.31.1
+```
+
+Log in as `root` using your device's root password (see `calc_root_pwd.py`).
+This uses the firmware's normal login, so it does not reset or bypass the password.
+Telnet sends credentials and traffic in plaintext; use a trusted LAN.
+Port 22 stays closed if no SSH server is installed.
+
+使用 `root` 和设备的 root 密码登录（见 `calc_root_pwd.py`）；不会重置或绕过密码。
+Telnet 明文传输密码和流量，请在可信 LAN 中使用。没有 SSH 服务时 22 端口仍关闭。
+
+For persistence on RD18, run the following **inside the router shell** instead of
+section 3.4's Dropbear script. It appends one cron entry and keeps existing jobs.
+The issue reports the initial Telnet workaround; reboot persistence still needs
+verification on your device, including the persistent `/etc/crontabs` mount.
+
+RD18 持久化请在**路由器 shell** 中执行以下命令，替代 3.4 的 Dropbear 脚本；
+保留现有 cron 任务。社区报告验证了首次 Telnet 访问；重启持久化仍需在本机确认，
+包括 `/etc/crontabs` 的持久挂载。
+
+```sh
+mkdir -p /data/telnet /etc/crontabs
+cat > /data/telnet/boot.sh <<'BOOTEOF'
+#!/bin/sh
+echo 1 > /proc/xiaoqiang/ft_mode
+netstat -ltn 2>/dev/null | grep -q ':23 ' || telnetd
+BOOTEOF
+chmod 700 /data/telnet/boot.sh
+nvram set telnet_en=1
+nvram commit
+grep -qF '/data/telnet/boot.sh' /etc/crontabs/root 2>/dev/null || echo '* * * * * /data/telnet/boot.sh' >> /etc/crontabs/root
+chmod 600 /etc/crontabs/root
+/etc/init.d/cron restart 2>/dev/null || /usr/sbin/crond -c /etc/crontabs -b
+/data/telnet/boot.sh
+```
+
+RD18 has a different partition layout (reported as `mtd0`–`mtd13`). Use the dynamic
+backup procedure in section 3.5: upload `/proc/mtd` **before** any partitions.
+RP01's partition numbers and calibration locations do not apply to RD18.
+The receiver checks decoded byte counts; `[UNCHECKED]` is not a verified backup.
+
+RD18 分区布局不同（报告为 `mtd0`–`mtd13`）。请按 3.5 的动态流程，**先上传
+`/proc/mtd`** 再备份分区。不要套用 RP01 分区编号或校准数据位置。
+接收端校验解码后的字节数，`[UNCHECKED]` 不表示备份已通过验证。
 
 ---
 
@@ -42,9 +357,10 @@
 | 设备 | 型号 | 固件 | 验证来源 |
 |---|---|---|---|
 | 小米 BE3600 Pro **网线版** | **RP01** | MiWiFi 稳定版 **1.0.67** | 作者本人（内核 `Linux 5.4.213 armv7l`，2026-09）|
+| 小米 BE5000 | **RD18** | MiWiFi 稳定版 **1.0.91** | [社区报告 #9](https://github.com/perrywey/xiaomi-rp01-root/issues/9)，使用 Telnet |
 | 小米 BE3600 Pro **8 口网线版** | **RP02** | MiWiFi 稳定版 **1.0.46** | 社区用户实测反馈，已完成 SSH 获取 |
 
-两台都是稳定版、都是网线版系列，且固件版本不同（1.0.46 / 1.0.67）都成立，
+RP01 和 RP02 都是稳定版、都是网线版系列，且固件版本不同（1.0.46 / 1.0.67）都成立，
 说明这个接口在多个版本上一直存在，不是某个版本的特例。
 
 **未验证但可能适用的**：BE3600 Pro 非网线版、BE6500 Pro 等其它新型号。
@@ -107,7 +423,7 @@ RP01/1.0.67 已确认满足。其他机型请自行解包固件确认，或直�
 - 本仓库的 `tools/` 目录
 
 ```bash
-git clone https://github.com/perrywey/xiaomi-rp01-root.git && cd xiaomi-rp01-root
+git clone https://github.com/pabragin/xiaomi-rp01-root.git && cd xiaomi-rp01-root
 ```
 
 **你需要知道两件事**
@@ -176,7 +492,7 @@ python3 tools/calc_root_pwd.py --selftest
 python3 tools/exploit_set_macfilter_rules.py --ip 192.168.31.1 --password 你的WEB密码
 ```
 
-脚本默认执行三条命令（生成 hostkey → 启动 dropbear）：
+脚本在 Dropbear 存在时生成 hostkey 并启动 SSH；缺失时自动使用 [Telnet](#rd18)。SSH 分支：
 
 ```sh
 mkdir -p /etc/dropbear
@@ -312,12 +628,18 @@ python3 tools/recv_backup.py ~/rp01_backup 8001
 **路由器 shell 里：**
 
 ```sh
-for m in 0 1 2 3 4 5 13 14 16 17 18 21; do dd if=/dev/mtdblock$m of=/tmp/m.bin bs=65536 2>/dev/null; base64 /tmp/m.bin > /tmp/m.b64; wget -q --post-file=/tmp/m.b64 -O /dev/null http://你的电脑IP:8001/mtd$m.b64; rm -f /tmp/m.bin /tmp/m.b64; done
+wget -q --post-file=/proc/mtd -O /dev/null http://你的电脑IP:8001/proc-mtd.txt &&
+awk -F: '/^mtd[0-9]+:/ {print $1}' /proc/mtd | while read -r m; do
+    dd if=/dev/mtdblock"${m#mtd}" of=/tmp/m.bin bs=65536 2>/dev/null &&
+    base64 /tmp/m.bin > /tmp/m.b64 &&
+    wget -q --post-file=/tmp/m.b64 -O /dev/null http://你的电脑IP:8001/"$m".b64 || break
+    rm -f /tmp/m.bin /tmp/m.b64
+done
 ```
 
 （把 `你的电脑IP` 换成实际地址，如 `192.168.31.100`。）
 
-电脑端会打印每个分区的大小和 `[OK]` / `[NG]` 校验结果，12 个全 `[OK]` 才算成功。
+电脑端会打印每个分区的大小和 `[OK]` / `[NG]` 校验结果，`/proc/mtd` 列出的每个分区都必须收到且为 `[OK]`。`[NG]` 表示大小不匹配，`[UNCHECKED]` 表示缺少对应的 `/proc/mtd` 数据。
 
 **为什么先 base64？** 见 [坑 4](#坑-4备份出来的文件只有几十字节)。
 
@@ -528,8 +850,8 @@ uci commit dhcp && /etc/init.d/dnsmasq restart
 
 #### 依赖关系
 
-**本项目零第三方依赖。** 三个脚本只用 Python 3 标准库（`hashlib`、`http.server`、
-`argparse`、`socketserver`、`base64`），不需要 `pip install` 任何东西。
+备份接收端和密码计算器仅需 Python 3 标准库。利用脚本另需 `requests`
+（`python3 -m pip install requests`）。
 
 刻意**不依赖** [xmir-patcher](https://github.com/openwrt-xiaomi/xmir-patcher)，原因有三：
 
@@ -632,9 +954,10 @@ firmware — no disassembly, no UART soldering, no downgrade, and no xmir-patche
 | Device | Model | Firmware | Verified by |
 |---|---|---|---|
 | Xiaomi BE3600 Pro (wired version) | **RP01** | MiWiFi stable **1.0.67** | Author (kernel `Linux 5.4.213 armv7l`, 2026-09) |
+| Xiaomi BE5000 | **RD18** | MiWiFi stable **1.0.91** | [Community report #9](https://github.com/perrywey/xiaomi-rp01-root/issues/9), Telnet access |
 | Xiaomi BE3600 Pro 8-port wired version | **RP02** | MiWiFi stable **1.0.46** | Community user report — SSH obtained successfully |
 
-Both are stable channel, both from the wired-version product line, and the two firmware
+RP01 and RP02 are stable channel, both from the wired-version product line, and their firmware
 versions differ (1.0.46 / 1.0.67) — so this endpoint has been present across releases,
 rather than being specific to one build.
 
@@ -678,7 +1001,7 @@ the target's admin password. Those boundaries are deliberate.
 - Python 3 (no third-party packages needed)
 
 ```bash
-git clone https://github.com/perrywey/xiaomi-rp01-root.git && cd xiaomi-rp01-root
+git clone https://github.com/pabragin/xiaomi-rp01-root.git && cd xiaomi-rp01-root
 ```
 
 You need two things:
@@ -740,8 +1063,9 @@ python3 tools/calc_root_pwd.py --selftest
 python3 tools/exploit_set_macfilter_rules.py --ip 192.168.31.1 --password YOUR_WEB_PASSWORD
 ```
 
-It runs three commands by default (generate hostkey → start dropbear). A response of
-`{"code":0}` means success. Verify with:
+By default it starts SSH when Dropbear exists and otherwise uses the
+[Telnet fallback](#rd18). `{"code":0}` is an API response, not proof that a
+service started. For the SSH branch, verify with:
 
 ```bash
 nc -vz 192.168.31.1 22      # should print succeeded
@@ -863,10 +1187,19 @@ python3 tools/recv_backup.py ~/rp01_backup 8001
 On the router shell:
 
 ```sh
-for m in 0 1 2 3 4 5 13 14 16 17 18 21; do dd if=/dev/mtdblock$m of=/tmp/m.bin bs=65536 2>/dev/null; base64 /tmp/m.bin > /tmp/m.b64; wget -q --post-file=/tmp/m.b64 -O /dev/null http://YOUR_PC_IP:8001/mtd$m.b64; rm -f /tmp/m.bin /tmp/m.b64; done
+wget -q --post-file=/proc/mtd -O /dev/null http://YOUR_PC_IP:8001/proc-mtd.txt &&
+awk -F: '/^mtd[0-9]+:/ {print $1}' /proc/mtd | while read -r m; do
+    dd if=/dev/mtdblock"${m#mtd}" of=/tmp/m.bin bs=65536 2>/dev/null &&
+    base64 /tmp/m.bin > /tmp/m.b64 &&
+    wget -q --post-file=/tmp/m.b64 -O /dev/null http://YOUR_PC_IP:8001/"$m".b64 || break
+    rm -f /tmp/m.bin /tmp/m.b64
+done
 ```
 
-The receiver prints a `[OK]` / `[NG]` size check per partition. All 12 must be `[OK]`.
+The receiver prints a `[OK]` / `[NG]` size check per partition. Every partition listed in `/proc/mtd` must be received and marked `[OK]`. `[NG]` means a size mismatch;
+`[UNCHECKED]` means there is no matching device partition size. You can also
+load a local snapshot with `--mtd /path/to/proc-mtd.txt`. Large partitions need
+enough free space in the router's `/tmp` for both binary and base64 copies.
 
 **Why base64 first?** See [trap 4](#trap-4-backups-arrive-only-a-few-dozen-bytes).
 
@@ -968,7 +1301,8 @@ On stable (`CHANNEL=release`) it refuses to start unless `telnet_en=1` or `ft_mo
 The gate is **inside the busybox binary**, not in `/etc/init.d/telnet` — so editing the
 init script does nothing.
 
-**Fix: use dropbear instead** (it contains none of those checks).
+**Fix:** use Dropbear if available, or enable the Telnet flags as described
+in the [RD18 section](#rd18).
 
 #### Trap 2: `dropbear -p 22 -R` won't start
 
@@ -1112,10 +1446,19 @@ against a single endpoint; read the source yourself.
 ubi23:cfg        on /data  ubifs     rw     ← this is what persists
 ```
 
+#### Regression checks
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+These tests run locally and require `requests`; they do not contact a router.
+Hardware access and reboot persistence have not been tested by this fork.
+
 #### Dependencies
 
-**No third-party dependencies.** All three scripts use only the Python 3 standard library
-(`hashlib`, `http.server`, `argparse`, `socketserver`, `base64`).
+The backup receiver and password calculator use the Python 3 standard library.
+The exploit script also requires `requests` (`python3 -m pip install requests`).
 
 [xmir-patcher](https://github.com/openwrt-xiaomi/xmir-patcher) is deliberately *not* a
 dependency:

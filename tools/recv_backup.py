@@ -1,85 +1,95 @@
 #!/usr/bin/env python3
+"""Receive base64 flash backups, checked against the device's /proc/mtd.
+
+Usage: python3 tools/recv_backup.py [output_dir] [port] [--mtd proc-mtd.txt]
+Upload /proc/mtd to /proc-mtd.txt before sending partitions, or supply --mtd.
+BusyBox wget can truncate binary POST bodies at NUL; send partitions as base64.
 """
-小米 RP01 flash 备份接收端 —— 在【Mac】上跑。
-
-用法:
-    python3 recv_backup.py ~/rp01_backup 8001
-
-为什么需要它:
-  busybox 的 `wget --post-file` 走 C 字符串, 遇到 0x00 就截断, 二进制分区直接传会残缺。
-  所以路由器侧先 base64, 本脚本收到后自动解码回 .bin, 并按分区表校验大小。
-
-路由器侧配合:
-  dd if=/dev/mtdblock21 of=/tmp/m.bin bs=65536 2>/dev/null
-  base64 /tmp/m.bin > /tmp/m.b64
-  wget -q --post-file=/tmp/m.b64 -O /dev/null http://<MacIP>:8001/mtd21.b64
-"""
+import argparse
 import base64
+import binascii
 import http.server
 import os
-import sys
+import re
 
-OUT = sys.argv[1] if len(sys.argv) > 1 else "./rp01_backup"
-PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8001
 
-# /proc/mtd 里的分区大小（字节），用于校验备份是否完整
-EXPECT = {
-    0: 0x00180000, 1: 0x00180000, 2: 0x00100000, 3: 0x00080000,
-    4: 0x00080000, 5: 0x00380000, 13: 0x00080000, 14: 0x00180000,
-    15: 0x00180000, 16: 0x00200000, 17: 0x00080000, 18: 0x00040000,
-    19: 0x02D00000, 20: 0x02D00000, 21: 0x00080000, 23: 0x02F40000,
-}
+def parse_mtd(text):
+    """Read hexadecimal partition sizes from a Linux /proc/mtd snapshot."""
+    sizes = {}
+    for line in text.splitlines():
+        if not line.strip() or re.fullmatch(r'\s*dev:\s+size\s+erasesize\s+name\s*', line):
+            continue
+        match = re.fullmatch(r'mtd(\d+):\s+([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+"[^"]*"\s*', line)
+        if not match:
+            raise ValueError(f"Invalid /proc/mtd line: {line!r}")
+        index, size = int(match[1]), int(match[2], 16)
+        if index in sizes or size <= 0:
+            raise ValueError(f"Invalid or duplicate mtd{index}")
+        sizes[index] = size
+    if not sizes:
+        raise ValueError("No partitions in /proc/mtd")
+    return sizes
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def _safe(self, name):
-        keep = [c for c in name if c.isalnum() or c in "._-"]
-        return "".join(keep) or "upload.bin"
-
     def do_POST(self):
-        total = int(self.headers.get("Content-Length") or 0)
+        try:
+            total = int(self.headers.get("Content-Length", ""))
+            if total <= 0:
+                raise ValueError("Missing or invalid Content-Length")
+        except ValueError as exc:
+            self._reply(str(exc).encode(), 400)
+            return
         buf = bytearray()
         while len(buf) < total:
             chunk = self.rfile.read(min(65536, total - len(buf)))
             if not chunk:
-                break
-            buf += chunk
-
-        fn = self._safe(os.path.basename(self.path.strip("/")))
-        data = bytes(buf)
-
-        if fn.endswith(".b64"):
-            try:
-                data = base64.b64decode(data)
-            except Exception as e:
-                print(f"[!] {fn} base64 解码失败: {e}", flush=True)
-                self._reply(b"bad")
+                self._reply(b"incomplete upload", 400)
                 return
-            fn = fn[:-4] + ".bin"
-
-        path = os.path.join(OUT, fn)
-        with open(path, "wb") as f:
-            f.write(data)
-
-        # 大小校验
-        mark, note = " ", ""
-        num = "".join(c for c in fn if c.isdigit())
-        if num and fn.startswith("mtd"):
-            idx = int(num)
-            if idx in EXPECT:
-                if len(data) == EXPECT[idx]:
-                    mark = "OK"
-                else:
-                    mark = "NG"
-                    note = f"  <-- 应为 {EXPECT[idx]:,}"
-
+            buf += chunk
+        fn = os.path.basename(self.path.strip("/"))
+        data = bytes(buf)
+        if fn == "proc-mtd.txt":
+            try:
+                sizes = parse_mtd(data.decode("ascii"))
+            except (UnicodeError, ValueError) as exc:
+                self._reply(str(exc).encode(), 400)
+                return
+            # One receiver session belongs to one device. Do not silently switch tables.
+            if self.server.expected and sizes != self.server.expected:
+                self._reply(b"partition table changed; start a new receiver/output directory", 409)
+                return
+            self.server.expected = sizes
+            mark, note = "MTD", f"  {len(sizes)} partitions"
+        else:
+            match = re.fullmatch(r"mtd(\d+)\.(b64|bin)", fn)
+            if not match:
+                self._reply(b"expected proc-mtd.txt or mtdN.b64/bin", 400)
+                return
+            if match[2] == "b64":
+                try:
+                    data = base64.b64decode(b"".join(data.split()), validate=True)
+                except (ValueError, binascii.Error):
+                    self._reply(b"invalid base64", 400)
+                    return
+            fn = f"mtd{match[1]}.bin"
+            expected = self.server.expected.get(int(match[1]))
+            if expected is None:
+                mark, note = "UNCHECKED", "  upload /proc/mtd as proc-mtd.txt first"
+            elif len(data) == expected:
+                mark, note = "OK", ""
+            else:
+                mark, note = "NG", f"  <-- expected {expected:,} bytes"
+        path = os.path.join(self.server.out, fn)
+        with open(path, "wb") as stream:
+            stream.write(data)
         print(f"[{mark}] {path}  {len(data):,} bytes{note}", flush=True)
-        self._reply(b"ok")
+        self._reply(mark.encode(), 422 if mark == "NG" else 200)
 
-    def _reply(self, body):
-        self.send_response(200)
+    def _reply(self, body, status=200):
+        self.send_response(status)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -91,7 +101,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-os.makedirs(OUT, exist_ok=True)
-print(f"[*] 接收目录: {os.path.abspath(OUT)}")
-print(f"[*] 监听 0.0.0.0:{PORT}  —— 等路由器 wget 过来（[OK]=大小正确 [NG]=残缺）")
-http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", nargs="?", default="./rp01_backup")
+    parser.add_argument("port", nargs="?", type=int, default=8001)
+    parser.add_argument("--mtd", help="local copy of the target device's /proc/mtd")
+    args = parser.parse_args()
+    expected = {}
+    if args.mtd:
+        try:
+            with open(args.mtd, encoding="ascii") as stream:
+                expected = parse_mtd(stream.read())
+        except (OSError, UnicodeError, ValueError) as exc:
+            parser.error(str(exc))
+    os.makedirs(args.output, exist_ok=True)
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
+    server.out, server.expected = args.output, expected
+    print(f"[*] Output: {os.path.abspath(args.output)}", flush=True)
+    print(f"[*] Listening on 0.0.0.0:{args.port}; upload /proc/mtd to /proc-mtd.txt first.", flush=True)
+    print("[*] [OK]=size matches, [NG]=size mismatch, [UNCHECKED]=no device size available", flush=True)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
